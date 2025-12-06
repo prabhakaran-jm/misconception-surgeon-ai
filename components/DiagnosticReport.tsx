@@ -22,6 +22,81 @@ interface ParsedSection {
   printTextClass: string;  // Darker text for print
 }
 
+// --- Sub-component: AI Reasoning Log (Tech/Terminal Style) ---
+const ReasoningLog: React.FC<{ content: string; onClose: () => void }> = ({ content, onClose }) => {
+    // Basic parsing for the log content
+    const confidenceMatch = content.match(/\*\*Confidence Score:\*\*\s*(\d+)%/);
+    const confidence = confidenceMatch ? parseInt(confidenceMatch[1]) : 0;
+    
+    // Split lines for cleaner terminal look
+    const lines = content.split('\n').filter(l => l.trim().length > 0);
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+            <div className="w-full max-w-2xl bg-[#0d1117] border border-slate-700 rounded-xl shadow-2xl overflow-hidden animate-slide-up">
+                {/* Terminal Header */}
+                <div className="flex items-center justify-between px-4 py-3 bg-[#161b22] border-b border-slate-700">
+                    <div className="flex items-center gap-2">
+                        <span className="material-symbols-outlined text-green-400 text-sm">terminal</span>
+                        <span className="text-slate-300 text-xs font-mono font-bold tracking-wide uppercase">Gemini 3 Pro // Reasoning Stream</span>
+                    </div>
+                    <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors">
+                        <span className="material-symbols-outlined text-lg">close</span>
+                    </button>
+                </div>
+                
+                {/* Terminal Body */}
+                <div className="p-6 font-mono text-sm overflow-y-auto max-h-[70vh]">
+                    
+                    {/* Confidence Visualizer */}
+                    <div className="mb-6 bg-[#0d1117] p-4 rounded-lg border border-slate-800">
+                        <div className="flex justify-between text-xs text-slate-400 mb-2 uppercase tracking-wider font-bold">
+                            <span>Analysis Confidence</span>
+                            <span>{confidence}%</span>
+                        </div>
+                        <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                            <div 
+                                className="h-full bg-gradient-to-r from-blue-500 to-green-400" 
+                                style={{ width: `${confidence}%` }}
+                            ></div>
+                        </div>
+                    </div>
+
+                    <div className="space-y-3 text-slate-300">
+                        {lines.map((line, i) => {
+                             if (line.includes('**')) {
+                                 // Highlight keys
+                                 const parts = line.split('**');
+                                 return (
+                                     <div key={i} className="flex gap-2">
+                                         <span className="text-blue-400 min-w-fit">➜</span>
+                                         <span>
+                                            <span className="text-purple-300 font-bold">{parts[1]}</span>
+                                            <span className="text-slate-400">{parts[2]}</span>
+                                         </span>
+                                     </div>
+                                 )
+                             }
+                             if (line.trim().startsWith('-')) {
+                                 return (
+                                     <div key={i} className="pl-6 text-green-300/90 border-l border-slate-800 ml-1">
+                                         {line}
+                                     </div>
+                                 )
+                             }
+                             return <div key={i} className="text-slate-500">{line}</div>;
+                        })}
+                    </div>
+                    
+                    <div className="mt-6 pt-4 border-t border-slate-800 text-xs text-slate-600 animate-pulse">
+                        _ cursor waiting...
+                    </div>
+                </div>
+            </div>
+        </div>
+    )
+}
+
 // --- Sub-component: Section Card (Handles both Screen and Print modes) ---
 const SectionCard: React.FC<{ 
     id: string;
@@ -120,24 +195,33 @@ export const DiagnosticReport: React.FC<DiagnosticReportProps> = ({
   const [isDownloadingPDF, setIsDownloadingPDF] = useState(false);
   const [animatedScore, setAnimatedScore] = useState(0);
   const [activeSection, setActiveSection] = useState<string>("");
+  const [showLogic, setShowLogic] = useState(false);
 
   // Diagram generation state
   const [diagramUrl, setDiagramUrl] = useState<string | null>(null);
   const [genStatus, setGenStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
-  const { headline, sections, severity, score } = useMemo(() => {
-    if (!result) return { headline: "", sections: [], severity: "Unknown", score: 0 };
+  const { headline, sections, severity, score, reasoningLog } = useMemo(() => {
+    if (!result) return { headline: "", sections: [], severity: "Unknown", score: 0, reasoningLog: "" };
 
     // Parse Headline (starts with #)
     let headlineText = "";
     let contentToParse = result;
+    let logicContent = "";
+    
+    // Extract Reasoning Log (Priority 1)
+    const logMatch = result.match(/### 7\. AI Reasoning Log([\s\S]*?)($|---)/);
+    if (logMatch) {
+        logicContent = logMatch[1].trim();
+        contentToParse = contentToParse.replace(logMatch[0], "").trim();
+    }
     
     // Simple extraction of the first # Headline line
-    const headlineMatch = result.match(/^#\s*(.+)$/m);
+    const headlineMatch = contentToParse.match(/^#\s*(.+)$/m);
     if (headlineMatch) {
         headlineText = headlineMatch[1].trim();
         // Remove the headline line from content so it doesn't duplicate in sections
-        contentToParse = result.replace(/^#\s*(.+)$/m, '').trim();
+        contentToParse = contentToParse.replace(/^#\s*(.+)$/m, '').trim();
     }
 
     const rawSections = contentToParse.split(/###\s*\d+\.\s*/).filter((s) => s.trim());
@@ -188,7 +272,7 @@ export const DiagnosticReport: React.FC<DiagnosticReportProps> = ({
         }
     }
 
-    return { headline: headlineText, sections: parsed, severity: severityLevel, score: calculatedScore };
+    return { headline: headlineText, sections: parsed, severity: severityLevel, score: calculatedScore, reasoningLog: logicContent };
   }, [result]);
 
   // Set initial active section
@@ -360,6 +444,9 @@ export const DiagnosticReport: React.FC<DiagnosticReportProps> = ({
   return (
     <div className="relative flex min-h-screen w-full flex-col items-center text-white">
       
+      {/* Reasoning Log Modal */}
+      {showLogic && <ReasoningLog content={reasoningLog} onClose={() => setShowLogic(false)} />}
+
       {/* Sticky Header - Hidden during capture */}
       {!isCapturing && (
           <div className="sticky top-0 z-40 w-full bg-background-dark/70 backdrop-blur-xl border-b border-white/5 transition-all shadow-lg no-capture">
@@ -401,8 +488,19 @@ export const DiagnosticReport: React.FC<DiagnosticReportProps> = ({
                     </div>
                 </div>
                 
-                <div className={`px-5 py-2 rounded-full border text-xs font-bold uppercase tracking-widest shadow-lg backdrop-blur-md ${getSeverityStyle(severity)} animate-fade-in`}>
-                    {severity} Issue
+                <div className="flex items-center gap-4">
+                    {reasoningLog && (
+                        <button 
+                            onClick={() => setShowLogic(true)}
+                            className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-bold uppercase tracking-wide hover:bg-indigo-500/20 transition-all"
+                        >
+                            <span className="material-symbols-outlined text-sm">terminal</span>
+                            View Logic
+                        </button>
+                    )}
+                    <div className={`px-5 py-2 rounded-full border text-xs font-bold uppercase tracking-widest shadow-lg backdrop-blur-md ${getSeverityStyle(severity)} animate-fade-in`}>
+                        {severity} Issue
+                    </div>
                 </div>
               </div>
           </div>

@@ -5,12 +5,13 @@ export interface AnalysePayload {
   problem: string;
   reasoning: string;
   imageBase64?: string;
+  audioBase64?: string;
   isKidFriendly?: boolean;
 }
 
 // Helper to clean base64 string
 const cleanBase64 = (base64: string) => {
-  return base64.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, "");
+  return base64.replace(/^data:(image\/(png|jpeg|jpg|webp)|audio\/(mp3|wav|webm|mp4));base64,/, "");
 };
 
 export const analyseMisconception = async (
@@ -37,6 +38,7 @@ Subject: ${payload.subject}
 Problem: ${payload.problem}
 Reasoning: ${payload.reasoning}
 Image: ${payload.imageBase64 ? "[Image included]" : "None"}
+Audio: ${payload.audioBase64 ? "[Audio included]" : "None"}
 
 INSTRUCTIONS:
 Analyze the student's submission and produce a diagnostic report.
@@ -80,6 +82,15 @@ You MUST output the response in the EXACT Markdown format below. Do not deviate 
 
 [Final Line: "Great work—every misconception you fix makes you stronger at maths."]
 
+### 7. AI Reasoning Log
+**Confidence Score:** [0-100]%
+**Cognitive Principles:** [List comma separated, e.g. Chunking, Transfer Learning]
+**Strategy:** [e.g. Scaffolding, Socratic Method]
+**Analysis Trace:**
+- [Step 1: Input Analysis]
+- [Step 2: Error Pattern Matching]
+- [Step 3: Strategy Selection]
+
 --- RESPONSE FORMAT END ---
 `;
 
@@ -88,10 +99,19 @@ You MUST output the response in the EXACT Markdown format below. Do not deviate 
   if (payload.imageBase64) {
     parts.push({
       inlineData: {
-        mimeType: "image/jpeg", // Assuming jpeg for simplicity or auto-detection from input
+        mimeType: "image/jpeg", // Assuming jpeg/png
         data: cleanBase64(payload.imageBase64),
       },
     });
+  }
+
+  if (payload.audioBase64) {
+      parts.push({
+          inlineData: {
+              mimeType: "audio/webm", // Gemini supports mp3, wav, aac, webm etc. Matches recorder output.
+              data: cleanBase64(payload.audioBase64),
+          }
+      });
   }
 
   try {

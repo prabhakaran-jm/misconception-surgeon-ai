@@ -1,5 +1,7 @@
 {
   "name": "Misconception Surgeon",
   "description": "AI-powered diagnostic tool to identify and repair STEM misconceptions using Gemini.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "microphone"
+  ]
 }

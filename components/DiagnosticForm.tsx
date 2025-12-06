@@ -55,6 +55,15 @@ export const DiagnosticForm: React.FC<DiagnosticFormProps> = ({
   const [isScanning, setIsScanning] = useState(false);
   const [detectedContent, setDetectedContent] = useState<'MATH' | 'CODE' | null>(null);
   const [isKidFriendly, setIsKidFriendly] = useState(false);
+  
+  // Audio Recording State
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const timerIntervalRef = useRef<number | null>(null);
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Sync prop changes if they occur
@@ -62,7 +71,70 @@ export const DiagnosticForm: React.FC<DiagnosticFormProps> = ({
     setSubject(initialSubject);
   }, [initialSubject]);
 
-  const currentStep = isLoading ? 3 : (reasoning.length > 10 ? 2 : 1);
+  const currentStep = isLoading ? 3 : (reasoning.length > 10 || audioBlob ? 2 : 1);
+
+  // Audio Recording Logic
+  const startRecording = async () => {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          alert("Audio recording is not supported in this browser or environment.");
+          return;
+      }
+      try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const mediaRecorder = new MediaRecorder(stream);
+          mediaRecorderRef.current = mediaRecorder;
+          audioChunksRef.current = [];
+
+          mediaRecorder.ondataavailable = (event) => {
+              if (event.data.size > 0) {
+                  audioChunksRef.current.push(event.data);
+              }
+          };
+
+          mediaRecorder.onstop = () => {
+              const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+              setAudioBlob(audioBlob);
+              stream.getTracks().forEach(track => track.stop());
+          };
+
+          mediaRecorder.start();
+          setIsRecording(true);
+          setRecordingTime(0);
+          
+          timerIntervalRef.current = window.setInterval(() => {
+              setRecordingTime(prev => prev + 1);
+          }, 1000);
+
+      } catch (err: any) {
+          console.error("Error accessing microphone:", err);
+          if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+              alert("Microphone permission was denied. Please allow access in your browser settings.");
+          } else {
+              alert("Could not access microphone: " + (err.message || "Unknown error"));
+          }
+      }
+  };
+
+  const stopRecording = () => {
+      if (mediaRecorderRef.current && isRecording) {
+          mediaRecorderRef.current.stop();
+          setIsRecording(false);
+          if (timerIntervalRef.current) {
+              clearInterval(timerIntervalRef.current);
+          }
+      }
+  };
+
+  const deleteRecording = () => {
+      setAudioBlob(null);
+      setRecordingTime(0);
+  };
+
+  const formatTime = (seconds: number) => {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -127,23 +199,38 @@ export const DiagnosticForm: React.FC<DiagnosticFormProps> = ({
     }
   };
 
+  const blobToBase64 = (blob: Blob): Promise<string> => {
+      return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+      });
+  };
+
   const handleSubmit = async () => {
-    if (!problem.trim() && !image) {
-      alert("Please enter a problem statement or upload an image.");
+    if (!problem.trim() && !image && !audioBlob) {
+      alert("Please enter a problem statement, upload an image, or record a voice note.");
       return;
     }
     
     setIsLoading(true);
     try {
+      let audioBase64 = undefined;
+      if (audioBlob) {
+          audioBase64 = await blobToBase64(audioBlob);
+      }
+
       const result = await analyseMisconception({
         subject,
         problem,
         reasoning,
         imageBase64: image || undefined,
+        audioBase64,
         isKidFriendly
       });
       // Pass both result and problem text back for history
-      onAnalysisComplete(result, problem || "Image based problem");
+      onAnalysisComplete(result, problem || "Image/Audio based problem");
     } catch (error) {
       console.error(error);
       alert("Error diagnosing misconception. Please check API key.");
@@ -186,6 +273,7 @@ export const DiagnosticForm: React.FC<DiagnosticFormProps> = ({
                     <p className="text-xl font-bold text-white animate-pulse tracking-tight">Analysing reasoning...</p>
                     <p className="text-base text-slate-400 mt-2 font-medium">Connecting to Gemini 3 Pro</p>
                     {isKidFriendly && <p className="text-sm text-blue-300 mt-1 font-bold animate-fade-in">✨ Kid-Friendly Mode Active</p>}
+                    {audioBlob && <p className="text-sm text-purple-300 mt-1 font-bold animate-fade-in">🎤 Analyzing Voice Input</p>}
                 </div>
             )}
 
@@ -265,31 +353,71 @@ export const DiagnosticForm: React.FC<DiagnosticFormProps> = ({
                 />
             </div>
 
-            {/* Reasoning */}
+            {/* Reasoning & Voice Recorder */}
             <div className="flex flex-col gap-3 animate-slide-up" style={{ animationDelay: '300ms' }}>
                 <div className="flex justify-between items-center pr-2">
                     <label className="text-xs font-bold text-slate-400 uppercase tracking-widest pl-1">
-                    Student Reasoning
+                    Student Reasoning (Text or Voice)
                     </label>
-                    {detectedContent === 'MATH' && (
-                        <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-bold uppercase tracking-wider animate-fade-in">
-                            <span className="material-symbols-outlined text-sm">function</span>
-                            Math Detected
-                        </span>
-                    )}
-                    {detectedContent === 'CODE' && (
-                        <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-400 text-xs font-bold uppercase tracking-wider animate-fade-in">
-                            <span className="material-symbols-outlined text-sm">code</span>
-                            Code Detected
-                        </span>
-                    )}
+                    <div className="flex items-center gap-3">
+                        {detectedContent === 'MATH' && (
+                            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-bold uppercase tracking-wider animate-fade-in">
+                                <span className="material-symbols-outlined text-sm">function</span>
+                                Math Detected
+                            </span>
+                        )}
+                        {detectedContent === 'CODE' && (
+                            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-400 text-xs font-bold uppercase tracking-wider animate-fade-in">
+                                <span className="material-symbols-outlined text-sm">code</span>
+                                Code Detected
+                            </span>
+                        )}
+                    </div>
                 </div>
-                <textarea
-                value={reasoning}
-                onChange={(e) => setReasoning(e.target.value)}
-                className={`w-full rounded-2xl border border-white/10 bg-background-dark/50 backdrop-blur-sm text-white p-5 h-52 placeholder:text-slate-500 font-mono text-sm resize-none transition-all hover:border-white/20 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary focus:shadow-neon-focus leading-relaxed ${isScanning ? 'animate-pulse' : ''}`}
-                placeholder="Type or paste the student’s steps, thoughts, or partial solution here..."
-                />
+                
+                <div className="relative">
+                    <textarea
+                    value={reasoning}
+                    onChange={(e) => setReasoning(e.target.value)}
+                    className={`w-full rounded-2xl border border-white/10 bg-background-dark/50 backdrop-blur-sm text-white p-5 h-52 placeholder:text-slate-500 font-mono text-sm resize-none transition-all hover:border-white/20 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary focus:shadow-neon-focus leading-relaxed ${isScanning ? 'animate-pulse' : ''}`}
+                    placeholder="Type reasoning OR press the mic button to explain verbally..."
+                    />
+                    
+                    {/* Voice Recorder Overlay / Button */}
+                    <div className="absolute bottom-4 right-4 flex items-center gap-2">
+                        {audioBlob && (
+                             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/20 border border-green-500/30 text-green-300 text-xs font-bold uppercase tracking-wide animate-fade-in">
+                                <span className="material-symbols-outlined text-sm">mic</span>
+                                Voice Attached
+                                <button 
+                                    onClick={deleteRecording} 
+                                    className="ml-1 hover:text-white transition-colors"
+                                    title="Delete Recording"
+                                >
+                                    <span className="material-symbols-outlined text-sm">close</span>
+                                </button>
+                             </div>
+                        )}
+                        
+                        {isRecording ? (
+                            <div className="flex items-center gap-3 px-4 py-2 rounded-full bg-red-500/20 border border-red-500/50 text-red-300 backdrop-blur-md animate-pulse">
+                                <div className="h-2 w-2 rounded-full bg-red-500 animate-pulse"></div>
+                                <span className="text-xs font-bold font-mono">{formatTime(recordingTime)}</span>
+                                <button onClick={stopRecording} className="ml-1 hover:text-white hover:scale-110 transition-transform">
+                                    <span className="material-symbols-outlined">stop_circle</span>
+                                </button>
+                            </div>
+                        ) : (
+                            <button 
+                                onClick={startRecording}
+                                className={`h-10 w-10 rounded-full flex items-center justify-center border transition-all hover:scale-110 active:scale-95 shadow-lg ${audioBlob ? 'bg-slate-700 border-slate-600 text-slate-400' : 'bg-primary text-white border-white/20 hover:bg-blue-600'}`}
+                                title="Record Voice Explanation"
+                            >
+                                <span className="material-symbols-outlined text-xl">mic</span>
+                            </button>
+                        )}
+                    </div>
+                </div>
             </div>
 
             {/* Upload Area */}
