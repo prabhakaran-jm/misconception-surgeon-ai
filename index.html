@@ -1,0 +1,115 @@
+
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Misconception Surgeon</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography,container-queries"></script>
+    <link href="https://fonts.googleapis.com" rel="preconnect" />
+    <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              primary: "#3A7BFF", // Bright electric blue
+              secondary: "#64748B", // Slate
+              "background-dark": "#0C1222", // Deep Navy
+              "card-dark": "#151e32", // Slightly lighter navy for cards
+              "card-hover": "#1E293B",
+              success: "#10B981",
+              warning: "#F59E0B",
+              danger: "#EF4444",
+            },
+            fontFamily: {
+              display: ["Space Grotesk", "sans-serif"],
+            },
+            boxShadow: {
+              "glow-blue": "0 0 20px 0 rgba(58, 123, 255, 0.3)",
+              "glow-card": "0 8px 32px 0 rgba(0, 0, 0, 0.3)",
+              "glass": "0 8px 32px 0 rgba(31, 38, 135, 0.37)",
+              "neon-focus": "0 0 12px 1px rgba(58, 123, 255, 0.5)",
+            },
+            animation: {
+              'fade-in': 'fadeIn 0.6s ease-out both',
+              'slide-up': 'slideUp 0.6s ease-out both',
+              'spin-slow': 'spin 3s linear infinite',
+              'float-slow': 'float 6s ease-in-out infinite',
+              'float-medium': 'float 4s ease-in-out infinite',
+              'float-fast': 'float 3s ease-in-out infinite',
+              'pulse-glow': 'pulseGlow 4s ease-in-out infinite',
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' },
+              },
+              slideUp: {
+                '0%': { opacity: '0', transform: 'translateY(20px)' },
+                '100%': { opacity: '1', transform: 'translateY(0)' },
+              },
+              float: {
+                '0%, 100%': { transform: 'translateY(0)' },
+                '50%': { transform: 'translateY(-15px)' },
+              },
+              pulseGlow: {
+                 '0%, 100%': { opacity: '0.4', transform: 'scale(1)' },
+                 '50%': { opacity: '0.6', transform: 'scale(1.1)' },
+              }
+            }
+          },
+        },
+      };
+    </script>
+    <style>
+      .material-symbols-outlined {
+        font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+      }
+      body {
+        min-height: 100vh;
+        background-color: #0C1222;
+        color: #ffffff;
+      }
+      /* Custom Scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #0C1222;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #334155;
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #475569;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.31.0",
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "react": "https://aistudiocdn.com/react@^19.2.1",
+    "react-markdown": "https://aistudiocdn.com/react-markdown@^10.1.0",
+    "html2canvas": "https://esm.sh/html2canvas@1.4.1",
+    "jspdf": "https://esm.sh/jspdf@2.5.1"
+  }
+}
+</script>
+</head>
+  <body class="bg-background-dark font-display text-white antialiased selection:bg-primary/30">
+    <div id="root"></div>
+  </body>
+</html>
