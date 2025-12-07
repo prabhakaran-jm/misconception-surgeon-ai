@@ -5,7 +5,7 @@
 **AI-powered diagnostic tool to identify and repair STEM misconceptions using Gemini 3 Pro**
 
 [![Gemini 3 Pro](https://img.shields.io/badge/Gemini-3%20Pro-4285F4?logo=google&logoColor=white)](https://ai.google.dev/)
-[![Hackathon](https://img.shields.io/badge/Hackathon-Vibe%20Coding%202024-FF6B6B)](https://www.kaggle.com/competitions/gemini-3-pro-vibe-coding)
+[![Hackathon](https://img.shields.io/badge/Hackathon-Vibe%20Coding%202025-FF6B6B)](https://www.kaggle.com/competitions/gemini-3-pro-vibe-coding)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)](https://react.dev/)
