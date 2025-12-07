@@ -2,7 +2,8 @@ import React, { useMemo, useState, useRef, useEffect } from "react";
 import Markdown from "react-markdown";
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
-import { generateConceptDiagram } from "../services/geminiService";
+import { generateConceptDiagram, explainWorkedExampleStep, evaluateQuizAnswer } from "../services/geminiService";
+import { AIConceptChat } from "./AIConceptChat";
 
 interface DiagnosticReportProps {
   subject: string;
@@ -18,23 +19,181 @@ interface ParsedSection {
   icon: string;
   colorClass: string;
   textColorClass: string;
-  printColorClass: string; // Darker background for print
-  printTextClass: string;  // Darker text for print
+  printColorClass: string;
+  printTextClass: string;
 }
+
+// --- Interactive Quiz Component ---
+const InteractiveQuiz: React.FC<{ content: string; subject: string }> = ({ content, subject }) => {
+    // Parse questions: ① ... ② ... ③ ...
+    const questions = useMemo(() => {
+        const matches = [
+            content.match(/①\s*(.*?)(?=\n- ②|$)/s),
+            content.match(/②\s*(.*?)(?=\n- ③|$)/s),
+            content.match(/③\s*(.*?)(?=\n\n|$)/s)
+        ];
+        return matches.map(m => m ? m[1].trim() : null).filter(Boolean) as string[];
+    }, [content]);
+
+    const [answers, setAnswers] = useState<string[]>(["", "", ""]);
+    const [feedbacks, setFeedbacks] = useState<{status: 'correct'|'incorrect'|null, msg: string}[]>([
+        {status: null, msg: ""}, {status: null, msg: ""}, {status: null, msg: ""}
+    ]);
+    const [loadingIndices, setLoadingIndices] = useState<number[]>([]);
+
+    const handleCheck = async (index: number) => {
+        if (!answers[index].trim()) return;
+        
+        setLoadingIndices(prev => [...prev, index]);
+        try {
+            const result = await evaluateQuizAnswer(questions[index], answers[index], subject);
+            const newFeedbacks = [...feedbacks];
+            newFeedbacks[index] = {
+                status: result.isCorrect ? 'correct' : 'incorrect',
+                msg: result.feedback
+            };
+            setFeedbacks(newFeedbacks);
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setLoadingIndices(prev => prev.filter(i => i !== index));
+        }
+    };
+
+    if (questions.length === 0) return <Markdown>{content}</Markdown>;
+
+    return (
+        <div className="flex flex-col gap-6">
+            {questions.map((q, i) => (
+                <div key={i} className="bg-background-dark/40 rounded-xl p-5 border border-white/5">
+                    <div className="flex gap-3 mb-3">
+                         <div className="h-6 w-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
+                             {i + 1}
+                         </div>
+                         <div className="text-slate-200 font-medium"><Markdown>{q}</Markdown></div>
+                    </div>
+                    
+                    <div className="pl-9">
+                        <div className="flex gap-2 mb-2">
+                            <input 
+                                type="text" 
+                                value={answers[i]}
+                                onChange={(e) => {
+                                    const newAns = [...answers];
+                                    newAns[i] = e.target.value;
+                                    setAnswers(newAns);
+                                }}
+                                onKeyDown={(e) => e.key === 'Enter' && handleCheck(i)}
+                                placeholder="Type your answer..."
+                                className="flex-1 bg-black/20 border border-white/10 rounded-lg px-4 py-2 text-sm text-white focus:ring-1 focus:ring-primary focus:border-primary outline-none"
+                            />
+                            <button 
+                                onClick={() => handleCheck(i)}
+                                disabled={loadingIndices.includes(i) || !answers[i]}
+                                className="px-4 py-2 bg-white/5 hover:bg-primary hover:text-white rounded-lg text-xs font-bold uppercase tracking-wide transition-colors disabled:opacity-50"
+                            >
+                                {loadingIndices.includes(i) ? 'Checking...' : 'Check'}
+                            </button>
+                        </div>
+                        
+                        {feedbacks[i].status && (
+                             <div className={`text-sm p-3 rounded-lg border ${feedbacks[i].status === 'correct' ? 'bg-green-500/10 border-green-500/20 text-green-300' : 'bg-red-500/10 border-red-500/20 text-red-300'} animate-fade-in`}>
+                                 <strong className="block mb-1">{feedbacks[i].status === 'correct' ? 'Correct!' : 'Not quite right.'}</strong>
+                                 {feedbacks[i].msg}
+                             </div>
+                        )}
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+// --- Interactive Worked Example Component ---
+const InteractiveWorkedExample: React.FC<{ content: string; context: any }> = ({ content, context }) => {
+    const [isInteractive, setIsInteractive] = useState(false);
+    const [explanation, setExplanation] = useState<{idx: number, text: string} | null>(null);
+    const [loadingIdx, setLoadingIdx] = useState<number | null>(null);
+
+    // Split content into "Before/After" block and "Derivation" steps
+    const parts = content.split(/\n\n(?=\d+\.|Step)/); // Rough split attempt
+    const comparisonBlock = parts[0]; 
+    const stepsBlock = parts.slice(1).join("\n\n") || content.replace(comparisonBlock, "");
+    
+    const lines = stepsBlock.split('\n').filter(l => l.trim().length > 0);
+
+    const handleExplain = async (line: string, idx: number) => {
+        setLoadingIdx(idx);
+        try {
+            const expl = await explainWorkedExampleStep(line, context);
+            setExplanation({ idx, text: expl });
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setLoadingIdx(null);
+        }
+    };
+
+    return (
+        <div className="space-y-6">
+            <div className="prose prose-invert max-w-none">
+                <Markdown>{comparisonBlock}</Markdown>
+            </div>
+            
+            <div className="border-t border-white/10 pt-4">
+                <div className="flex items-center justify-between mb-4">
+                    <h4 className="text-white font-bold text-lg">Step-by-Step Derivation</h4>
+                    <button 
+                        onClick={() => setIsInteractive(!isInteractive)}
+                        className={`text-xs font-bold uppercase tracking-wider px-3 py-1.5 rounded-full border transition-all ${isInteractive ? 'bg-primary text-white border-primary shadow-neon-focus' : 'bg-white/5 text-slate-400 border-white/10 hover:border-white/30'}`}
+                    >
+                        {isInteractive ? "Interactive Mode ON" : "Enable Step-by-Step"}
+                    </button>
+                </div>
+
+                <div className="space-y-3 font-mono text-sm bg-black/20 p-5 rounded-xl border border-white/5">
+                    {lines.map((line, i) => (
+                        <div key={i} className="relative group/line">
+                            <div className={`py-2 px-3 rounded-lg transition-colors ${explanation?.idx === i ? 'bg-primary/20 border border-primary/30' : 'hover:bg-white/5'}`}>
+                                <Markdown>{line}</Markdown>
+                            </div>
+                            
+                            {isInteractive && (
+                                <button
+                                    onClick={() => handleExplain(line, i)}
+                                    className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover/line:opacity-100 transition-opacity px-2 py-1 bg-primary text-white text-[10px] font-bold uppercase rounded shadow-lg"
+                                >
+                                    {loadingIdx === i ? '...' : 'Why?'}
+                                </button>
+                            )}
+
+                            {explanation?.idx === i && (
+                                <div className="ml-4 mt-2 p-3 bg-blue-900/30 border border-blue-500/30 rounded-lg text-blue-200 text-xs font-sans animate-slide-up relative">
+                                    <div className="absolute -top-1.5 left-4 w-3 h-3 bg-blue-900/30 border-t border-l border-blue-500/30 rotate-45"></div>
+                                    <span className="font-bold block mb-1">Explanation:</span>
+                                    {explanation.text}
+                                    <button onClick={() => setExplanation(null)} className="absolute top-2 right-2 text-blue-400 hover:text-white">
+                                        <span className="material-symbols-outlined text-sm">close</span>
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+};
 
 // --- Sub-component: AI Reasoning Log (Tech/Terminal Style) ---
 const ReasoningLog: React.FC<{ content: string; onClose: () => void }> = ({ content, onClose }) => {
-    // Basic parsing for the log content
     const confidenceMatch = content.match(/\*\*Confidence Score:\*\*\s*(\d+)%/);
     const confidence = confidenceMatch ? parseInt(confidenceMatch[1]) : 0;
-    
-    // Split lines for cleaner terminal look
     const lines = content.split('\n').filter(l => l.trim().length > 0);
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
             <div className="w-full max-w-2xl bg-[#0d1117] border border-slate-700 rounded-xl shadow-2xl overflow-hidden animate-slide-up">
-                {/* Terminal Header */}
                 <div className="flex items-center justify-between px-4 py-3 bg-[#161b22] border-b border-slate-700">
                     <div className="flex items-center gap-2">
                         <span className="material-symbols-outlined text-green-400 text-sm">terminal</span>
@@ -44,52 +203,22 @@ const ReasoningLog: React.FC<{ content: string; onClose: () => void }> = ({ cont
                         <span className="material-symbols-outlined text-lg">close</span>
                     </button>
                 </div>
-                
-                {/* Terminal Body */}
                 <div className="p-6 font-mono text-sm overflow-y-auto max-h-[70vh]">
-                    
-                    {/* Confidence Visualizer */}
                     <div className="mb-6 bg-[#0d1117] p-4 rounded-lg border border-slate-800">
                         <div className="flex justify-between text-xs text-slate-400 mb-2 uppercase tracking-wider font-bold">
                             <span>Analysis Confidence</span>
                             <span>{confidence}%</span>
                         </div>
                         <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
-                            <div 
-                                className="h-full bg-gradient-to-r from-blue-500 to-green-400" 
-                                style={{ width: `${confidence}%` }}
-                            ></div>
+                            <div className="h-full bg-gradient-to-r from-blue-500 to-green-400" style={{ width: `${confidence}%` }}></div>
                         </div>
                     </div>
-
                     <div className="space-y-3 text-slate-300">
-                        {lines.map((line, i) => {
-                             if (line.includes('**')) {
-                                 // Highlight keys
-                                 const parts = line.split('**');
-                                 return (
-                                     <div key={i} className="flex gap-2">
-                                         <span className="text-blue-400 min-w-fit">➜</span>
-                                         <span>
-                                            <span className="text-purple-300 font-bold">{parts[1]}</span>
-                                            <span className="text-slate-400">{parts[2]}</span>
-                                         </span>
-                                     </div>
-                                 )
-                             }
-                             if (line.trim().startsWith('-')) {
-                                 return (
-                                     <div key={i} className="pl-6 text-green-300/90 border-l border-slate-800 ml-1">
-                                         {line}
-                                     </div>
-                                 )
-                             }
-                             return <div key={i} className="text-slate-500">{line}</div>;
-                        })}
-                    </div>
-                    
-                    <div className="mt-6 pt-4 border-t border-slate-800 text-xs text-slate-600 animate-pulse">
-                        _ cursor waiting...
+                        {lines.map((line, i) => (
+                             <div key={i} className={line.includes('**') ? "flex gap-2" : line.trim().startsWith('-') ? "pl-6 text-green-300/90 border-l border-slate-800 ml-1" : "text-slate-500"}>
+                                 {line}
+                             </div>
+                        ))}
                     </div>
                 </div>
             </div>
@@ -97,7 +226,7 @@ const ReasoningLog: React.FC<{ content: string; onClose: () => void }> = ({ cont
     )
 }
 
-// --- Sub-component: Section Card (Handles both Screen and Print modes) ---
+// --- Section Card ---
 const SectionCard: React.FC<{ 
     id: string;
     section: ParsedSection; 
@@ -108,39 +237,23 @@ const SectionCard: React.FC<{
 }> = ({ id, section, defaultOpen, delay, extraContent, isPrintMode }) => {
     const [isOpen, setIsOpen] = useState(defaultOpen);
 
-    // --- PRINT MODE RENDER ---
     if (isPrintMode) {
         return (
-            <div 
-                id={id}
-                className="flex flex-col rounded-xl bg-white border border-slate-300 mb-6 break-inside-avoid shadow-sm overflow-visible"
-            >
+            <div id={id} className="flex flex-col rounded-xl bg-white border border-slate-300 mb-6 break-inside-avoid shadow-sm overflow-visible">
                 <div className="flex items-center gap-4 p-5 border-b border-slate-200 bg-slate-100 rounded-t-xl">
                     <div className={`flex items-center justify-center h-10 w-10 rounded-lg ${section.printColorClass} border border-slate-300 shrink-0`}>
-                        <span className={`material-symbols-outlined text-xl ${section.printTextClass}`}>
-                            {section.icon}
-                        </span>
+                        <span className={`material-symbols-outlined text-xl ${section.printTextClass}`}>{section.icon}</span>
                     </div>
-                    <h3 className="text-xl font-bold text-slate-900 tracking-tight">
-                        {section.title}
-                    </h3>
+                    <h3 className="text-xl font-bold text-slate-900 tracking-tight">{section.title}</h3>
                 </div>
-                
                 <div className="p-6">
-                    <div className="prose prose-slate prose-lg prose-p:text-slate-800 prose-p:leading-relaxed prose-headings:text-slate-900 prose-strong:text-slate-900 prose-li:text-slate-800 max-w-none">
-                        <Markdown>{section.content}</Markdown>
-                    </div>
-                    {extraContent && (
-                        <div className="mt-6 pt-4 border-t border-slate-200">
-                            {extraContent}
-                        </div>
-                    )}
+                    <div className="prose prose-slate prose-lg max-w-none"><Markdown>{section.content}</Markdown></div>
+                    {extraContent && <div className="mt-6 pt-4 border-t border-slate-200">{extraContent}</div>}
                 </div>
             </div>
         );
     }
 
-    // --- SCREEN MODE RENDER ---
     return (
         <div 
             id={id}
@@ -149,34 +262,22 @@ const SectionCard: React.FC<{
         >
             <button 
                 onClick={() => setIsOpen(!isOpen)}
-                className="group flex items-center justify-between p-6 w-full text-left hover:bg-white/5 transition-colors focus:outline-none focus:ring-1 focus:ring-primary focus:shadow-neon-focus rounded-t-2xl"
+                className="group flex items-center justify-between p-6 w-full text-left hover:bg-white/5 transition-colors focus:outline-none rounded-t-2xl"
             >
                 <div className="flex items-center gap-5">
                     <div className={`flex items-center justify-center h-12 w-12 rounded-xl ${section.colorClass} bg-opacity-10 shrink-0 transition-transform duration-300 ease-out group-hover:scale-110 border border-white/5`}>
-                        <span className={`material-symbols-outlined text-2xl ${section.textColorClass}`}>
-                            {section.icon}
-                        </span>
+                        <span className={`material-symbols-outlined text-2xl ${section.textColorClass}`}>{section.icon}</span>
                     </div>
-                    <h3 className="text-2xl font-bold text-white tracking-tight">
-                        {section.title}
-                    </h3>
+                    <h3 className="text-2xl font-bold text-white tracking-tight">{section.title}</h3>
                 </div>
-                <span className={`material-symbols-outlined text-slate-500 text-2xl transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>
-                    expand_more
-                </span>
+                <span className={`material-symbols-outlined text-slate-500 text-2xl transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>expand_more</span>
             </button>
-            
-            {/* Using max-height for animation instead of grid to avoid overflow clipping issues in some contexts, but simplified here for robustness */}
             <div className={`${isOpen ? 'block' : 'hidden'} animate-fade-in`}>
                 <div className="p-8 pt-2 border-t border-white/5">
-                    <div className="prose prose-invert prose-lg prose-p:text-slate-200 prose-p:leading-loose prose-p:text-lg prose-headings:text-white prose-headings:font-bold prose-headings:mb-4 prose-headings:mt-6 prose-strong:text-white prose-strong:font-bold prose-li:text-slate-200 prose-li:leading-relaxed max-w-none">
+                    <div className="prose prose-invert prose-lg max-w-none">
                         <Markdown>{section.content}</Markdown>
                     </div>
-                    {extraContent && (
-                            <div className="mt-8 pt-6 border-t border-white/5 animate-fade-in">
-                                {extraContent}
-                            </div>
-                    )}
+                    {extraContent && <div className="mt-8 pt-6 border-t border-white/5 animate-fade-in">{extraContent}</div>}
                 </div>
             </div>
         </div>
@@ -190,43 +291,46 @@ export const DiagnosticReport: React.FC<DiagnosticReportProps> = ({
   onNewProblem,
 }) => {
   const reportContainerRef = useRef<HTMLDivElement>(null);
-  const [isCapturing, setIsCapturing] = useState(false); // Controls Print Mode
+  const [isCapturing, setIsCapturing] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
   const [isDownloadingPDF, setIsDownloadingPDF] = useState(false);
   const [animatedScore, setAnimatedScore] = useState(0);
   const [activeSection, setActiveSection] = useState<string>("");
   const [showLogic, setShowLogic] = useState(false);
-
-  // Diagram generation state
+  const [showChat, setShowChat] = useState(false); // AI Chat Modal State
+  
   const [diagramUrl, setDiagramUrl] = useState<string | null>(null);
   const [genStatus, setGenStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
   const { headline, sections, severity, score, reasoningLog } = useMemo(() => {
     if (!result) return { headline: "", sections: [], severity: "Unknown", score: 0, reasoningLog: "" };
 
-    // Parse Headline (starts with #)
-    let headlineText = "";
     let contentToParse = result;
     let logicContent = "";
     
-    // Extract Reasoning Log (Priority 1)
+    // Extract Reasoning Log
     const logMatch = result.match(/### 7\. AI Reasoning Log([\s\S]*?)($|---)/);
     if (logMatch) {
         logicContent = logMatch[1].trim();
         contentToParse = contentToParse.replace(logMatch[0], "").trim();
     }
     
-    // Simple extraction of the first # Headline line
+    // Extract Headline
+    let headlineText = "";
     const headlineMatch = contentToParse.match(/^#\s*(.+)$/m);
     if (headlineMatch) {
         headlineText = headlineMatch[1].trim();
-        // Remove the headline line from content so it doesn't duplicate in sections
         contentToParse = contentToParse.replace(/^#\s*(.+)$/m, '').trim();
     }
 
-    const rawSections = contentToParse.split(/###\s*\d+\.\s*/).filter((s) => s.trim());
-    
-    // Config includes both Screen (dark) and Print (light/bold) classes
+    // ROBUST PARSING BY HEADER NAME (Prevents Duplication)
+    const extractSection = (headerName: string) => {
+        // Regex looks for "### [Number]. [HeaderName]" ... content ... until next "###" or end
+        const regex = new RegExp(`###\\s*\\d+\\.\\s*${headerName}([\\s\\S]*?)(?=###|$)`, 'i');
+        const match = contentToParse.match(regex);
+        return match ? match[1].trim() : "";
+    };
+
     const uiConfig = [
       { title: "What I Observed", icon: "visibility", color: "bg-blue-500", text: "text-blue-400", printColor: "bg-blue-100", printText: "text-blue-700" },
       { title: "Detected Misconceptions", icon: "error", color: "bg-red-500", text: "text-red-400", printColor: "bg-red-100", printText: "text-red-700" },
@@ -236,350 +340,162 @@ export const DiagnosticReport: React.FC<DiagnosticReportProps> = ({
       { title: "Check Yourself", icon: "quiz", color: "bg-purple-500", text: "text-purple-400", printColor: "bg-purple-100", printText: "text-purple-700" },
     ];
 
-    const parsed: ParsedSection[] = rawSections.map((sec, index) => {
-        const lines = sec.trim().split('\n');
-        // Handle cases where title might be in the first line or not
-        const config = uiConfig[index] || { title: lines[0].replace(/^#+\s*/, ''), icon: "info", color: "bg-gray-500", text: "text-gray-400", printColor: "bg-gray-100", printText: "text-gray-700" };
-        
-        // Remove title from content if it was duplicated
-        const contentBody = sec.replace(new RegExp(`^${config.title}`, 'i'), '').trim();
-
+    const parsed: ParsedSection[] = uiConfig.map((config, idx) => {
+        const content = extractSection(config.title);
         return {
-            id: `section-${index}`,
+            id: `section-${idx}`,
             title: config.title,
-            content: contentBody,
+            content: content || "No content generated.",
             icon: config.icon,
             colorClass: config.color,
             textColorClass: config.text,
             printColorClass: config.printColor,
             printTextClass: config.printText
         };
-    });
+    }).filter(s => s.content !== "No content generated."); // Only return found sections
 
     // Calculate Severity
     const misconceptionSection = parsed.find(p => p.title === "Detected Misconceptions");
     let severityLevel = "Mild";
-    let calculatedScore = 30; // Base score
-
+    let calculatedScore = 30;
     if (misconceptionSection) {
         const bulletCount = (misconceptionSection.content.match(/[•-]/g) || []).length;
-        if (bulletCount >= 3) {
-             severityLevel = "Severe";
-             calculatedScore = 95;
-        } else if (bulletCount >= 2) {
-             severityLevel = "Moderate";
-             calculatedScore = 65;
-        }
+        if (bulletCount >= 3) { severityLevel = "Severe"; calculatedScore = 95; }
+        else if (bulletCount >= 2) { severityLevel = "Moderate"; calculatedScore = 65; }
     }
 
     return { headline: headlineText, sections: parsed, severity: severityLevel, score: calculatedScore, reasoningLog: logicContent };
   }, [result]);
 
-  // Set initial active section
   useEffect(() => {
-    if (sections.length > 0) {
-      setActiveSection(sections[0].id);
-    }
+    if (sections.length > 0) setActiveSection(sections[0].id);
   }, [sections]);
 
-  // ScrollSpy Logic
   useEffect(() => {
-    const handleScroll = () => {
-      const scrollPosition = window.scrollY + 200; // Offset for header
-
-      for (const section of sections) {
-        const element = document.getElementById(section.id);
-        if (element) {
-          const { offsetTop, offsetHeight } = element;
-          if (scrollPosition >= offsetTop && scrollPosition < offsetTop + offsetHeight) {
-            setActiveSection(section.id);
-            break;
-          }
-        }
-      }
-    };
-
-    window.addEventListener("scroll", handleScroll);
-    return () => window.removeEventListener("scroll", handleScroll);
-  }, [sections]);
-
-  // Animate Gauge on Mount
-  useEffect(() => {
-      const timer = setTimeout(() => {
-          setAnimatedScore(score);
-      }, 300);
+      const timer = setTimeout(() => setAnimatedScore(score), 300);
       return () => clearTimeout(timer);
   }, [score]);
 
-  // Generate Diagram Effect
-  useEffect(() => {
-      setDiagramUrl(null);
-      setGenStatus('idle');
-  }, [result]);
-
+  // Diagram Gen
   useEffect(() => {
       const repairSection = sections.find(s => s.title === "Concept Repair");
-      if (repairSection && genStatus === 'idle' && result) {
+      if (repairSection && genStatus === 'idle' && result && !diagramUrl) {
           setGenStatus('loading');
           generateConceptDiagram(repairSection.content)
-              .then(url => {
-                  setDiagramUrl(url);
-                  setGenStatus('success');
-              })
-              .catch(e => {
-                  console.error("Failed to generate diagram", e);
-                  setGenStatus('error');
-              });
+              .then(url => { setDiagramUrl(url); setGenStatus('success'); })
+              .catch(e => { console.error(e); setGenStatus('error'); });
       }
   }, [sections, genStatus, result]);
 
   const scrollToSection = (id: string) => {
       const element = document.getElementById(id);
       if (element) {
-          const y = element.getBoundingClientRect().top + window.scrollY - 100; // Offset for sticky header
+          const y = element.getBoundingClientRect().top + window.scrollY - 100;
           window.scrollTo({ top: y, behavior: 'smooth' });
       }
   };
 
   const getSeverityStyle = (s: string) => {
       if (isCapturing) {
-          // Print Mode Severity Styles
            switch(s) {
               case "Severe": return "bg-red-100 text-red-700 border-red-300";
               case "Moderate": return "bg-orange-100 text-orange-700 border-orange-300";
               default: return "bg-green-100 text-green-700 border-green-300";
           }
       }
-      // Screen Mode Severity Styles
       switch(s) {
-          case "Severe": return "bg-red-500/10 text-red-300 border-red-500/20 ring-1 ring-red-500/20";
-          case "Moderate": return "bg-orange-500/10 text-orange-300 border-orange-500/20 ring-1 ring-orange-500/20";
-          default: return "bg-green-500/10 text-green-300 border-green-500/20 ring-1 ring-green-500/20";
-      }
-  }
-  
-  const getGaugeColor = (s: string) => {
-      switch(s) {
-          case "Severe": return "#EF4444"; // red-500
-          case "Moderate": return "#F97316"; // orange-500
-          default: return "#22C55E"; // green-500
+          case "Severe": return "bg-red-500/10 text-red-300 border-red-500/20";
+          case "Moderate": return "bg-orange-500/10 text-orange-300 border-orange-500/20";
+          default: return "bg-green-500/10 text-green-300 border-green-500/20";
       }
   }
 
-  // --- EXPORT HANDLERS ---
   const handleExport = async (type: 'png' | 'pdf') => {
       if (!reportContainerRef.current) return;
-      
       const setDownloading = type === 'png' ? setIsSharing : setIsDownloadingPDF;
       setDownloading(true);
-      
-      // 1. Enter Print Mode
       setIsCapturing(true);
-
-      // 2. Wait for React to render the white layout
       await new Promise(resolve => setTimeout(resolve, 800));
-
       try {
           const element = reportContainerRef.current;
-          
-          // 3. Capture with light settings
-          const canvas = await html2canvas(element, {
-              backgroundColor: '#ffffff', // White background for print
-              scale: 2, // High resolution
-              useCORS: true,
-              logging: false,
-              ignoreElements: (element) => element.classList.contains('no-capture'),
-              windowWidth: 1200, // Enforce desktop width layout
-              onclone: (clonedDoc) => {
-                  // Ensure all elements are visible in clone
-                  const clonedElement = clonedDoc.querySelector(`[data-capture-target="true"]`) as HTMLElement;
-                  if (clonedElement) {
-                      clonedElement.style.height = 'auto';
-                      clonedElement.style.overflow = 'visible';
-                  }
-              }
-          });
-
+          const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 2, useCORS: true, logging: false, windowWidth: 1200 });
           if (type === 'png') {
-              const image = canvas.toDataURL("image/png");
               const link = document.createElement('a');
-              link.href = image;
-              link.download = `Misconception-Diagnosis-${subject}-${new Date().getTime()}.png`;
+              link.href = canvas.toDataURL("image/png");
+              link.download = `Report-${subject}.png`;
               link.click();
           } else {
               const imgData = canvas.toDataURL('image/png');
               const pdf = new jsPDF('p', 'mm', 'a4');
-              const imgWidth = 210;
-              const pageHeight = 297;
-              const imgHeight = (canvas.height * imgWidth) / canvas.width;
-              let heightLeft = imgHeight;
-              let position = 0;
-
-              pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-              heightLeft -= pageHeight;
-
-              while (heightLeft >= 0) {
-                  position = heightLeft - imgHeight;
-                  pdf.addPage();
-                  pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-                  heightLeft -= pageHeight;
-              }
-              pdf.save(`Misconception-Report-${subject}.pdf`);
+              const imgHeight = (canvas.height * 210) / canvas.width;
+              pdf.addImage(imgData, 'PNG', 0, 0, 210, imgHeight);
+              pdf.save(`Report-${subject}.pdf`);
           }
-      } catch (error) {
-          console.error("Export failed:", error);
-          alert("Failed to export report. Please try again.");
-      } finally {
-          // 4. Revert to Screen Mode
-          setIsCapturing(false);
-          setDownloading(false);
-      }
+      } catch (e) { console.error(e); } finally { setIsCapturing(false); setDownloading(false); }
   };
-  
-  // Gauge Calculations
-  const radius = 18;
-  const circumference = 2 * Math.PI * radius;
-  const strokeDashoffset = circumference - (animatedScore / 100) * circumference;
 
   return (
     <div className="relative flex min-h-screen w-full flex-col items-center text-white">
-      
-      {/* Reasoning Log Modal */}
       {showLogic && <ReasoningLog content={reasoningLog} onClose={() => setShowLogic(false)} />}
+      
+      {showChat && (
+          <AIConceptChat 
+            context={{
+                subject,
+                problem: headline, // Using headline as concise problem ref
+                misconception: sections.find(s=>s.title==="Detected Misconceptions")?.content || "",
+                repair: sections.find(s=>s.title==="Concept Repair")?.content || ""
+            }} 
+            onClose={() => setShowChat(false)} 
+          />
+      )}
 
-      {/* Sticky Header - Hidden during capture */}
       {!isCapturing && (
           <div className="sticky top-0 z-40 w-full bg-background-dark/70 backdrop-blur-xl border-b border-white/5 transition-all shadow-lg no-capture">
               <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                    <button 
-                        onClick={onBack}
-                        className="group p-2 -ml-2 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-colors focus:outline-none focus:ring-1 focus:ring-primary focus:shadow-neon-focus"
-                    >
+                    <button onClick={onBack} className="group p-2 -ml-2 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-colors">
                         <span className="material-symbols-outlined transition-transform duration-300 group-hover:scale-110">arrow_back</span>
                     </button>
-                    <div className="flex items-center gap-3">
-                        <div className="flex flex-col">
-                            <h1 className="text-lg font-bold leading-none tracking-tight">Diagnostic Report</h1>
-                            <span className="text-sm text-slate-400 leading-none mt-1.5 font-medium">{subject}</span>
-                        </div>
-                        
-                        {/* Circular Severity Gauge (Screen Only) */}
-                        <div className="relative h-10 w-10 group cursor-help ml-2 hidden sm:block">
-                            <svg className="h-full w-full -rotate-90 transform" viewBox="0 0 44 44">
-                                <circle cx="22" cy="22" r={radius} fill="none" stroke="currentColor" strokeWidth="4" className="text-slate-700/30" />
-                                <circle 
-                                    cx="22" cy="22" r={radius} fill="none" 
-                                    stroke={getGaugeColor(severity)} 
-                                    strokeWidth="4" 
-                                    strokeDasharray={circumference} 
-                                    strokeDashoffset={strokeDashoffset} 
-                                    strokeLinecap="round"
-                                    className="transition-all duration-1000 ease-out"
-                                    style={{ filter: `drop-shadow(0 0 4px ${getGaugeColor(severity)}80)` }}
-                                />
-                            </svg>
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                 <span className="text-[10px] font-bold" style={{ color: getGaugeColor(severity) }}>
-                                     {animatedScore}
-                                 </span>
-                            </div>
-                        </div>
+                    <div>
+                        <h1 className="text-lg font-bold leading-none">Diagnostic Report</h1>
+                        <span className="text-sm text-slate-400 leading-none mt-1.5 font-medium">{subject}</span>
                     </div>
                 </div>
-                
                 <div className="flex items-center gap-4">
                     {reasoningLog && (
-                        <button 
-                            onClick={() => setShowLogic(true)}
-                            className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-bold uppercase tracking-wide hover:bg-indigo-500/20 transition-all"
-                        >
-                            <span className="material-symbols-outlined text-sm">terminal</span>
-                            View Logic
+                        <button onClick={() => setShowLogic(true)} className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-bold uppercase tracking-wide hover:bg-indigo-500/20">
+                            <span className="material-symbols-outlined text-sm">terminal</span> Logic
                         </button>
                     )}
-                    <div className={`px-5 py-2 rounded-full border text-xs font-bold uppercase tracking-widest shadow-lg backdrop-blur-md ${getSeverityStyle(severity)} animate-fade-in`}>
-                        {severity} Issue
-                    </div>
+                    <div className={`px-5 py-2 rounded-full border text-xs font-bold uppercase tracking-widest ${getSeverityStyle(severity)}`}>{severity} Issue</div>
                 </div>
               </div>
           </div>
       )}
 
-      {/* Main Content Area */}
-      <main className={`w-full max-w-6xl mx-auto p-4 sm:p-8 pb-32 relative z-10 transition-colors duration-500 ${isCapturing ? 'bg-white text-slate-900 min-h-screen' : ''}`}>
+      <main className={`w-full max-w-6xl mx-auto p-4 sm:p-8 pb-32 relative z-10 ${isCapturing ? 'bg-white text-slate-900 min-h-screen' : ''}`}>
         <div className={`grid gap-8 items-start ${!isCapturing ? 'lg:grid-cols-[240px_1fr]' : 'grid-cols-1'}`}>
-            
-            {/* Sidebar Navigation - Hidden during capture */}
             {!isCapturing && (
-                <aside className="hidden lg:block sticky top-28 animate-slide-up no-capture">
+                <aside className="hidden lg:block sticky top-28 no-capture">
                     <nav className="flex flex-col gap-1 p-4 rounded-2xl bg-card-dark/20 backdrop-blur-sm border border-white/5">
-                        <p className="px-3 py-2 text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">
-                            Sections
-                        </p>
-                        {sections.map((section) => {
-                            const isActive = activeSection === section.id;
-                            return (
-                                <button
-                                    key={section.id}
-                                    onClick={() => scrollToSection(section.id)}
-                                    className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all duration-300 text-left group ${
-                                        isActive 
-                                        ? "bg-primary/10 text-white shadow-neon-focus border border-primary/20" 
-                                        : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
-                                    }`}
-                                >
-                                    <span className={`material-symbols-outlined text-lg ${isActive ? 'text-primary' : 'text-slate-500 group-hover:text-slate-300'}`}>
-                                        {section.icon}
-                                    </span>
-                                    <span className="text-sm font-medium truncate">
-                                        {section.title}
-                                    </span>
-                                </button>
-                            );
-                        })}
+                        <p className="px-3 py-2 text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Sections</p>
+                        {sections.map(s => (
+                            <button key={s.id} onClick={() => scrollToSection(s.id)} className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-left ${activeSection === s.id ? "bg-primary/10 text-white border border-primary/20" : "text-slate-400 hover:text-slate-200"}`}>
+                                <span className={`material-symbols-outlined text-lg ${activeSection === s.id ? 'text-primary' : ''}`}>{s.icon}</span>
+                                <span className="text-sm font-medium truncate">{s.title}</span>
+                            </button>
+                        ))}
                     </nav>
                 </aside>
             )}
 
-            {/* Main Report Column */}
             <div className="flex flex-col gap-6 w-full">
-                
-                {/* Intro Text (Screen Only) */}
-                {!isCapturing && (
-                    <p className="text-slate-400 text-center lg:text-left text-base mb-2 animate-fade-in max-w-2xl leading-relaxed no-capture">
-                        Review the detailed analysis below to understand the root cause of the misconception and how to fix it effectively.
-                    </p>
-                )}
-
-                {/* --- CAPTURE CONTAINER --- */}
-                <div 
-                    ref={reportContainerRef} 
-                    data-capture-target="true"
-                    className={`flex flex-col gap-5 rounded-xl ${isCapturing ? 'p-8 bg-white' : 'p-4 -m-4'}`}
-                >
-                    {/* Header for Print/Image Only */}
-                    {isCapturing && (
-                        <div className="mb-8 text-center border-b-2 border-slate-100 pb-6">
-                            <h1 className="text-4xl font-extrabold text-slate-900 mb-2 tracking-tight">Misconception Surgeon Report</h1>
-                            <div className="flex items-center justify-center gap-4 text-slate-500 font-medium">
-                                <span>{subject}</span>
-                                <span>•</span>
-                                <span>{new Date().toLocaleDateString()}</span>
-                            </div>
-                            <div className={`inline-block mt-4 px-4 py-1.5 rounded-full border text-sm font-bold uppercase tracking-widest ${getSeverityStyle(severity)}`}>
-                                {severity} Severity
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Report Headline Summary */}
+                <div ref={reportContainerRef} data-capture-target="true" className={`flex flex-col gap-5 rounded-xl ${isCapturing ? 'p-8 bg-white' : 'p-4 -m-4'}`}>
                     {headline && (
                         <div className={`rounded-xl p-6 mb-2 break-inside-avoid ${isCapturing ? 'bg-blue-50 border border-blue-100' : 'bg-gradient-to-r from-blue-900/30 to-background-dark border border-primary/20 shadow-glow-blue'}`}>
                              <h2 className={`text-xl font-bold mb-1 ${isCapturing ? 'text-blue-900' : 'text-blue-200'}`}>Root Misconception Identified</h2>
-                             <p className={`text-lg leading-relaxed ${isCapturing ? 'text-slate-800' : 'text-white'}`}>
-                                 {headline}
-                             </p>
+                             <p className={`text-lg leading-relaxed ${isCapturing ? 'text-slate-800' : 'text-white'}`}>{headline}</p>
                         </div>
                     )}
 
@@ -591,98 +507,32 @@ export const DiagnosticReport: React.FC<DiagnosticReportProps> = ({
                             defaultOpen={idx < 4}
                             delay={idx * 100}
                             isPrintMode={isCapturing}
-                            extraContent={section.title === "Concept Repair" ? (
-                                <div className={`relative w-full rounded-2xl overflow-hidden mt-4 min-h-[200px] flex items-center justify-center ${isCapturing ? 'bg-slate-50 border border-slate-200' : 'bg-black/20 border border-white/10'}`}>
-                                    {genStatus === 'loading' && !isCapturing && (
-                                        <div className="flex flex-col items-center justify-center py-12 gap-3 animate-fade-in">
-                                            <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin"></div>
-                                            <p className="text-xs font-bold uppercase tracking-widest text-primary/70 animate-pulse">Generating Visual Aid...</p>
+                            extraContent={
+                                section.title === "Concept Repair" ? (
+                                    <div className="flex flex-col gap-4">
+                                        <div className={`relative w-full rounded-2xl overflow-hidden mt-4 min-h-[200px] flex items-center justify-center ${isCapturing ? 'bg-slate-50 border border-slate-200' : 'bg-black/20 border border-white/10'}`}>
+                                            {genStatus === 'loading' && !isCapturing && <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin"></div>}
+                                            {genStatus === 'success' && diagramUrl && <img src={diagramUrl} alt="Diagram" className="w-full h-auto object-cover" />}
+                                            {!isCapturing && !diagramUrl && genStatus !== 'loading' && <p className="text-slate-500 text-xs">Visual aid loading...</p>}
                                         </div>
-                                    )}
-                                    {genStatus === 'success' && diagramUrl && (
-                                        <div className="group relative w-full animate-fade-in">
-                                            <img src={diagramUrl} alt="Concept Diagram" className="w-full h-auto object-cover" />
-                                            {!isCapturing && (
-                                                <div className="absolute bottom-3 right-3 px-3 py-1.5 bg-black/60 backdrop-blur-md rounded-lg text-[10px] font-bold text-white/80 uppercase tracking-wider border border-white/10 shadow-lg">
-                                                    AI Generated Diagram
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-                                    {genStatus === 'error' && (
-                                        <div className="flex flex-col items-center justify-center py-8 gap-2 opacity-60">
-                                            <span className="material-symbols-outlined text-slate-500">broken_image</span>
-                                            <p className="text-xs text-slate-500 font-bold uppercase">Visual Aid Generation Failed</p>
-                                        </div>
-                                    )}
-                                </div>
-                            ) : undefined}
+                                        {!isCapturing && (
+                                            <div className="flex justify-end">
+                                                <button onClick={() => setShowChat(true)} className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-blue-600 text-white rounded-full font-bold shadow-lg shadow-primary/30 transition-all hover:scale-105">
+                                                    <span className="material-symbols-outlined">chat_bubble</span>
+                                                    Still Confused? Ask AI
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : section.title === "Worked Correct Example" && !isCapturing ? (
+                                    <InteractiveWorkedExample content={section.content} context={{subject, headline}} />
+                                ) : section.title === "Check Yourself" && !isCapturing ? (
+                                    <InteractiveQuiz content={section.content} subject={subject} />
+                                ) : undefined
+                            }
                         />
                     ))}
-                    
-                    {/* Footer for Print Only */}
-                    {isCapturing && (
-                        <div className="mt-8 pt-8 border-t border-slate-200 text-center text-slate-400 text-sm">
-                            Generated by Misconception Surgeon AI • {new Date().getFullYear()}
-                        </div>
-                    )}
                 </div>
-
-                {/* Action Buttons (Screen Only) */}
-                {!isCapturing && (
-                    <div className="flex flex-col md:flex-row gap-4 mt-6 animate-slide-up delay-500 no-capture">
-                    
-                        {/* Group Secondary Actions */}
-                        <div className="flex flex-1 gap-4">
-                            <button
-                                onClick={() => handleExport('png')}
-                                disabled={isSharing}
-                                className="group flex-1 flex items-center justify-center gap-2 h-14 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm text-slate-300 font-bold hover:bg-white/10 hover:text-white transition-all focus:outline-none focus:ring-1 focus:ring-primary focus:shadow-neon-focus text-base"
-                            >
-                                {isSharing ? (
-                                    <span className="material-symbols-outlined animate-spin text-xl">progress_activity</span>
-                                ) : (
-                                    <span className="material-symbols-outlined text-xl transition-transform duration-300 group-hover:scale-110">share</span>
-                                )}
-                                <span className="truncate">{isSharing ? "Generating..." : "Share Image"}</span>
-                            </button>
-                            
-                            <button
-                                onClick={() => handleExport('pdf')}
-                                disabled={isDownloadingPDF}
-                                className="group flex-1 flex items-center justify-center gap-2 h-14 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm text-slate-300 font-bold hover:bg-white/10 hover:text-white transition-all focus:outline-none focus:ring-1 focus:ring-primary focus:shadow-neon-focus text-base"
-                            >
-                                {isDownloadingPDF ? (
-                                    <span className="material-symbols-outlined animate-spin text-xl">progress_activity</span>
-                                ) : (
-                                    <span className="material-symbols-outlined text-xl transition-transform duration-300 group-hover:scale-110">picture_as_pdf</span>
-                                )}
-                                <span className="truncate">{isDownloadingPDF ? "Creating PDF..." : "Download PDF"}</span>
-                            </button>
-                        </div>
-
-                        <div className="hidden md:block w-px bg-white/10 mx-2"></div>
-
-                        {/* Group Primary Actions */}
-                        <div className="flex flex-1 gap-4">
-                            <button
-                                onClick={onBack}
-                                className="group flex-1 flex items-center justify-center gap-2 h-14 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm text-slate-300 font-bold hover:bg-white/10 hover:text-white transition-all focus:outline-none focus:ring-1 focus:ring-primary focus:shadow-neon-focus text-base"
-                            >
-                                <span className="material-symbols-outlined text-xl transition-transform duration-300 group-hover:scale-110">edit</span>
-                                Edit Inputs
-                            </button>
-
-                            <button
-                                onClick={onNewProblem}
-                                className="group flex-[1.2] flex items-center justify-center gap-2 h-14 rounded-2xl bg-primary text-white font-bold shadow-lg shadow-primary/25 hover:bg-blue-600 hover:shadow-primary/40 hover:-translate-y-0.5 transition-all focus:outline-none focus:ring-1 focus:ring-primary focus:shadow-neon-focus text-base border border-white/10"
-                            >
-                                <span className="material-symbols-outlined text-xl transition-transform duration-300 group-hover:scale-110">add_circle</span>
-                                New Diagnosis
-                            </button>
-                        </div>
-                    </div>
-                )}
             </div>
         </div>
       </main>
