@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import Markdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import { askFollowUpQuestion } from '../services/geminiService';
 import { ChatMessage } from '../types';
 
@@ -79,7 +82,14 @@ export const AIConceptChat: React.FC<AIConceptChatProps> = ({ context, onClose }
                                 ? 'bg-primary text-white rounded-br-none' 
                                 : 'bg-slate-700/50 text-slate-200 border border-white/5 rounded-bl-none'
                             }`}>
-                                {msg.text}
+                                <div className="prose prose-invert prose-sm max-w-none">
+                                    <Markdown 
+                                        remarkPlugins={[remarkMath]} 
+                                        rehypePlugins={[[rehypeKatex, { strict: false }]]}
+                                    >
+                                        {msg.text}
+                                    </Markdown>
+                                </div>
                             </div>
                         </div>
                     ))}
