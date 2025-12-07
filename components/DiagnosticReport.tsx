@@ -1,3 +1,4 @@
+
 import React, { useMemo, useState, useRef, useEffect } from "react";
 import Markdown from "react-markdown";
 import html2canvas from "html2canvas";
@@ -248,7 +249,8 @@ const SectionCard: React.FC<{
                 </div>
                 <div className="p-6">
                     <div className="prose prose-slate prose-lg max-w-none"><Markdown>{section.content}</Markdown></div>
-                    {extraContent && <div className="mt-6 pt-4 border-t border-slate-200">{extraContent}</div>}
+                    {/* Render extraContent in print mode only if useful (like diagrams), typically interactive widgets are hidden */}
+                    {section.title === "Concept Repair" && extraContent && <div className="mt-6 pt-4 border-t border-slate-200">{extraContent}</div>}
                 </div>
             </div>
         );
@@ -415,10 +417,20 @@ export const DiagnosticReport: React.FC<DiagnosticReportProps> = ({
       const setDownloading = type === 'png' ? setIsSharing : setIsDownloadingPDF;
       setDownloading(true);
       setIsCapturing(true);
+      
+      // Allow DOM to update to print styles
       await new Promise(resolve => setTimeout(resolve, 800));
+      
       try {
           const element = reportContainerRef.current;
-          const canvas = await html2canvas(element, { backgroundColor: '#ffffff', scale: 2, useCORS: true, logging: false, windowWidth: 1200 });
+          const canvas = await html2canvas(element, { 
+              backgroundColor: '#ffffff', 
+              scale: 2, 
+              useCORS: true, 
+              logging: false, 
+              windowWidth: 1200 
+          });
+          
           if (type === 'png') {
               const link = document.createElement('a');
               link.href = canvas.toDataURL("image/png");
@@ -427,8 +439,27 @@ export const DiagnosticReport: React.FC<DiagnosticReportProps> = ({
           } else {
               const imgData = canvas.toDataURL('image/png');
               const pdf = new jsPDF('p', 'mm', 'a4');
-              const imgHeight = (canvas.height * 210) / canvas.width;
-              pdf.addImage(imgData, 'PNG', 0, 0, 210, imgHeight);
+              const pdfWidth = 210;
+              const pdfHeight = 297;
+              
+              const imgProps = pdf.getImageProperties(imgData);
+              const imgHeight = (imgProps.height * pdfWidth) / imgProps.width;
+              
+              let heightLeft = imgHeight;
+              let position = 0;
+              
+              // First page
+              pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
+              heightLeft -= pdfHeight;
+              
+              // Subsequent pages
+              while (heightLeft > 0) {
+                  position -= pdfHeight; // Move image up by one page height
+                  pdf.addPage();
+                  pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
+                  heightLeft -= pdfHeight;
+              }
+              
               pdf.save(`Report-${subject}.pdf`);
           }
       } catch (e) { console.error(e); } finally { setIsCapturing(false); setDownloading(false); }
@@ -474,7 +505,7 @@ export const DiagnosticReport: React.FC<DiagnosticReportProps> = ({
           </div>
       )}
 
-      <main className={`w-full max-w-6xl mx-auto p-4 sm:p-8 pb-32 relative z-10 ${isCapturing ? 'bg-white text-slate-900 min-h-screen' : ''}`}>
+      <main className={`w-full max-w-6xl mx-auto p-4 sm:p-8 relative z-10 ${isCapturing ? 'bg-white text-slate-900 min-h-screen' : ''}`}>
         <div className={`grid gap-8 items-start ${!isCapturing ? 'lg:grid-cols-[240px_1fr]' : 'grid-cols-1'}`}>
             {!isCapturing && (
                 <aside className="hidden lg:block sticky top-28 no-capture">
@@ -533,6 +564,35 @@ export const DiagnosticReport: React.FC<DiagnosticReportProps> = ({
                         />
                     ))}
                 </div>
+                
+                {/* Footer Actions */}
+                {!isCapturing && (
+                    <div className="flex flex-col sm:flex-row justify-center gap-4 mt-12 pb-10 no-capture print:hidden">
+                        <button
+                            onClick={() => handleExport('png')}
+                            disabled={isSharing}
+                            className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-card-dark/40 border border-white/10 hover:bg-white/10 text-white font-bold transition-all hover:scale-105 disabled:opacity-50"
+                        >
+                            {isSharing ? <span className="material-symbols-outlined animate-spin">sync</span> : <span className="material-symbols-outlined">image</span>}
+                            <span>{isSharing ? 'Generating...' : 'Save Image'}</span>
+                        </button>
+                        <button
+                            onClick={() => handleExport('pdf')}
+                            disabled={isDownloadingPDF}
+                            className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-card-dark/40 border border-white/10 hover:bg-white/10 text-white font-bold transition-all hover:scale-105 disabled:opacity-50"
+                        >
+                            {isDownloadingPDF ? <span className="material-symbols-outlined animate-spin">sync</span> : <span className="material-symbols-outlined">picture_as_pdf</span>}
+                            <span>{isDownloadingPDF ? 'Generating...' : 'Save PDF'}</span>
+                        </button>
+                        <button
+                            onClick={onNewProblem}
+                            className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-primary hover:bg-blue-600 text-white font-bold shadow-lg shadow-primary/20 transition-all hover:scale-105"
+                        >
+                            <span className="material-symbols-outlined">add_circle</span>
+                            <span>New Diagnosis</span>
+                        </button>
+                    </div>
+                )}
             </div>
         </div>
       </main>
