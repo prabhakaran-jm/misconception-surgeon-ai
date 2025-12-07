@@ -61,7 +61,13 @@ You MUST output the response in the EXACT Markdown format below. Do not deviate 
 **After (Correct):**
 \`[Show the corrected structure in one line]\`
 
-[Provide a concise 4-step derivation. Use clear comments. Use LaTeX format for math expressions where needed.]
+**Derivation:**
+[Provide a step-by-step derivation. Format it exactly like this:]
+[Explanation text for step 1]
+$$[Math Equation for step 1]$$
+[Explanation text for step 2]
+$$[Math Equation for step 2]$$
+...
 
 ### 6. Check Yourself
 [Include 3 questions:]

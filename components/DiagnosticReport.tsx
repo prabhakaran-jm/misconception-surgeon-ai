@@ -3,6 +3,8 @@ import React, { useMemo, useState, useRef, useEffect } from "react";
 import Markdown from "react-markdown";
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import { generateConceptDiagram, explainWorkedExampleStep, evaluateQuizAnswer } from "../services/geminiService";
 import { AIConceptChat } from "./AIConceptChat";
 
@@ -61,7 +63,7 @@ const InteractiveQuiz: React.FC<{ content: string; subject: string }> = ({ conte
         }
     };
 
-    if (questions.length === 0) return <Markdown>{content}</Markdown>;
+    if (questions.length === 0) return <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[[rehypeKatex, { strict: false }]]}>{content}</Markdown>;
 
     return (
         <div className="flex flex-col gap-6">
@@ -71,7 +73,7 @@ const InteractiveQuiz: React.FC<{ content: string; subject: string }> = ({ conte
                          <div className="h-6 w-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
                              {i + 1}
                          </div>
-                         <div className="text-slate-200 font-medium"><Markdown>{q}</Markdown></div>
+                         <div className="text-slate-200 font-medium"><Markdown remarkPlugins={[remarkMath]} rehypePlugins={[[rehypeKatex, { strict: false }]]}>{q}</Markdown></div>
                     </div>
                     
                     <div className="pl-9">
@@ -116,10 +118,23 @@ const InteractiveWorkedExample: React.FC<{ content: string; context: any }> = ({
     const [explanation, setExplanation] = useState<{idx: number, text: string} | null>(null);
     const [loadingIdx, setLoadingIdx] = useState<number | null>(null);
 
-    // Split content into "Before/After" block and "Derivation" steps
-    const parts = content.split(/\n\n(?=\d+\.|Step)/); // Rough split attempt
-    const comparisonBlock = parts[0]; 
-    const stepsBlock = parts.slice(1).join("\n\n") || content.replace(comparisonBlock, "");
+    // Robust Split using the new Marker
+    const splitMarker = "**Derivation:**";
+    const hasMarker = content.includes(splitMarker);
+    
+    let comparisonBlock = content;
+    let stepsBlock = "";
+
+    if (hasMarker) {
+        const parts = content.split(splitMarker);
+        comparisonBlock = parts[0].trim();
+        stepsBlock = parts[1].trim();
+    } else {
+        // Fallback split if marker missing
+        const parts = content.split(/\n\n(?=\d+\.|Step)/);
+        comparisonBlock = parts[0]; 
+        stepsBlock = parts.slice(1).join("\n\n") || content.replace(comparisonBlock, "");
+    }
     
     const lines = stepsBlock.split('\n').filter(l => l.trim().length > 0);
 
@@ -135,10 +150,15 @@ const InteractiveWorkedExample: React.FC<{ content: string; context: any }> = ({
         }
     };
 
+    // Helper to determine if a line is Math (Equation) or Text (Instruction)
+    const isMathLine = (line: string) => {
+        return line.includes('$$') || line.includes('=') || line.trim().startsWith('$');
+    };
+
     return (
         <div className="space-y-6">
             <div className="prose prose-invert max-w-none">
-                <Markdown>{comparisonBlock}</Markdown>
+                <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[[rehypeKatex, { strict: false }]]}>{comparisonBlock}</Markdown>
             </div>
             
             <div className="border-t border-white/10 pt-4">
@@ -152,34 +172,50 @@ const InteractiveWorkedExample: React.FC<{ content: string; context: any }> = ({
                     </button>
                 </div>
 
-                <div className="space-y-3 font-mono text-sm bg-black/20 p-5 rounded-xl border border-white/5">
-                    {lines.map((line, i) => (
-                        <div key={i} className="relative group/line">
-                            <div className={`py-2 px-3 rounded-lg transition-colors ${explanation?.idx === i ? 'bg-primary/20 border border-primary/30' : 'hover:bg-white/5'}`}>
-                                <Markdown>{line}</Markdown>
-                            </div>
-                            
-                            {isInteractive && (
-                                <button
-                                    onClick={() => handleExplain(line, i)}
-                                    className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover/line:opacity-100 transition-opacity px-2 py-1 bg-primary text-white text-[10px] font-bold uppercase rounded shadow-lg"
-                                >
-                                    {loadingIdx === i ? '...' : 'Why?'}
-                                </button>
-                            )}
-
-                            {explanation?.idx === i && (
-                                <div className="ml-4 mt-2 p-3 bg-blue-900/30 border border-blue-500/30 rounded-lg text-blue-200 text-xs font-sans animate-slide-up relative">
-                                    <div className="absolute -top-1.5 left-4 w-3 h-3 bg-blue-900/30 border-t border-l border-blue-500/30 rotate-45"></div>
-                                    <span className="font-bold block mb-1">Explanation:</span>
-                                    {explanation.text}
-                                    <button onClick={() => setExplanation(null)} className="absolute top-2 right-2 text-blue-400 hover:text-white">
-                                        <span className="material-symbols-outlined text-sm">close</span>
-                                    </button>
+                <div className="space-y-4 text-sm bg-black/20 p-6 rounded-2xl border border-white/5">
+                    {lines.map((line, i) => {
+                        const isMath = isMathLine(line);
+                        
+                        if (!isMath) {
+                            // Render Instruction Text cleanly
+                            return (
+                                <div key={i} className="text-slate-400 font-bold uppercase tracking-wide text-xs pt-2">
+                                    <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[[rehypeKatex, { strict: false }]]}>{line}</Markdown>
                                 </div>
-                            )}
-                        </div>
-                    ))}
+                            );
+                        }
+
+                        // Render Math Block
+                        return (
+                            <div key={i} className="relative group/line">
+                                <div className={`py-3 px-4 rounded-xl transition-all ${explanation?.idx === i ? 'bg-primary/10 border border-primary/30' : 'bg-white/5 border border-white/5 hover:border-white/20'}`}>
+                                    <div className="text-base text-white font-medium flex justify-center">
+                                         <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[[rehypeKatex, { strict: false }]]}>{line}</Markdown>
+                                    </div>
+                                </div>
+                                
+                                {isInteractive && (
+                                    <button
+                                        onClick={() => handleExplain(line, i)}
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover/line:opacity-100 transition-opacity px-2 py-1 bg-primary text-white text-[10px] font-bold uppercase rounded shadow-lg hover:scale-105"
+                                    >
+                                        {loadingIdx === i ? '...' : 'Why?'}
+                                    </button>
+                                )}
+
+                                {explanation?.idx === i && (
+                                    <div className="mt-2 p-3 bg-blue-900/40 border border-blue-500/30 rounded-lg text-blue-100 text-xs animate-slide-up relative">
+                                        <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-blue-900/40 border-t border-l border-blue-500/30 rotate-45"></div>
+                                        <span className="font-bold block mb-1 text-primary">Explanation:</span>
+                                        {explanation.text}
+                                        <button onClick={() => setExplanation(null)} className="absolute top-2 right-2 text-blue-400 hover:text-white">
+                                            <span className="material-symbols-outlined text-sm">close</span>
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
         </div>
@@ -235,7 +271,8 @@ const SectionCard: React.FC<{
     delay: number;
     extraContent?: React.ReactNode; 
     isPrintMode: boolean;
-}> = ({ id, section, defaultOpen, delay, extraContent, isPrintMode }) => {
+    replaceContent?: boolean;
+}> = ({ id, section, defaultOpen, delay, extraContent, isPrintMode, replaceContent }) => {
     const [isOpen, setIsOpen] = useState(defaultOpen);
 
     if (isPrintMode) {
@@ -248,9 +285,15 @@ const SectionCard: React.FC<{
                     <h3 className="text-xl font-bold text-slate-900 tracking-tight">{section.title}</h3>
                 </div>
                 <div className="p-6">
-                    <div className="prose prose-slate prose-lg max-w-none"><Markdown>{section.content}</Markdown></div>
-                    {/* Render extraContent in print mode only if useful (like diagrams), typically interactive widgets are hidden */}
-                    {section.title === "Concept Repair" && extraContent && <div className="mt-6 pt-4 border-t border-slate-200">{extraContent}</div>}
+                    {!replaceContent && (
+                        <div className="prose prose-slate prose-lg max-w-none"><Markdown remarkPlugins={[remarkMath]} rehypePlugins={[[rehypeKatex, { strict: false }]]}>{section.content}</Markdown></div>
+                    )}
+                    {/* Render extraContent directly if replacing, or append it if not */}
+                    {(replaceContent || (section.title === "Concept Repair" && extraContent)) && (
+                         <div className={replaceContent ? "" : "mt-6 pt-4 border-t border-slate-200"}>
+                            {extraContent}
+                         </div>
+                    )}
                 </div>
             </div>
         );
@@ -276,10 +319,16 @@ const SectionCard: React.FC<{
             </button>
             <div className={`${isOpen ? 'block' : 'hidden'} animate-fade-in`}>
                 <div className="p-8 pt-2 border-t border-white/5">
-                    <div className="prose prose-invert prose-lg max-w-none">
-                        <Markdown>{section.content}</Markdown>
-                    </div>
-                    {extraContent && <div className="mt-8 pt-6 border-t border-white/5 animate-fade-in">{extraContent}</div>}
+                    {!replaceContent && (
+                        <div className="prose prose-invert prose-lg max-w-none">
+                            <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[[rehypeKatex, { strict: false }]]}>{section.content}</Markdown>
+                        </div>
+                    )}
+                    {(replaceContent || extraContent) && (
+                         <div className={replaceContent ? "animate-fade-in" : "mt-8 pt-6 border-t border-white/5 animate-fade-in"}>
+                             {extraContent}
+                         </div>
+                    )}
                 </div>
             </div>
         </div>
@@ -526,7 +575,7 @@ export const DiagnosticReport: React.FC<DiagnosticReportProps> = ({
                     {headline && (
                         <div className={`rounded-xl p-6 mb-2 break-inside-avoid ${isCapturing ? 'bg-blue-50 border border-blue-100' : 'bg-gradient-to-r from-blue-900/30 to-background-dark border border-primary/20 shadow-glow-blue'}`}>
                              <h2 className={`text-xl font-bold mb-1 ${isCapturing ? 'text-blue-900' : 'text-blue-200'}`}>Root Misconception Identified</h2>
-                             <p className={`text-lg leading-relaxed ${isCapturing ? 'text-slate-800' : 'text-white'}`}>{headline}</p>
+                             <p className={`text-lg leading-relaxed ${isCapturing ? 'text-slate-800' : 'text-white'}`}><Markdown remarkPlugins={[remarkMath]} rehypePlugins={[[rehypeKatex, { strict: false }]]}>{headline}</Markdown></p>
                         </div>
                     )}
 
@@ -538,6 +587,7 @@ export const DiagnosticReport: React.FC<DiagnosticReportProps> = ({
                             defaultOpen={idx < 4}
                             delay={idx * 100}
                             isPrintMode={isCapturing}
+                            replaceContent={!isCapturing && (section.title === "Worked Correct Example" || section.title === "Check Yourself")}
                             extraContent={
                                 section.title === "Concept Repair" ? (
                                     <div className="flex flex-col gap-4">
